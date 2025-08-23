@@ -1,23 +1,24 @@
-# backend/app/main.py
-
-from fastapi import FastAPI, HTTPException, Form, UploadFile, File
+ from fastapi import FastAPI, HTTPException, Form, UploadFile, File, Path
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel, Field
+from typing import List, Dict, Any
 import fitz  # PyMuPDF
 import json
 import os
 import sys
-import google.generativeai as genai # Ensure this is used if GOOGLE_API_KEY is configured
+import re
+import google.generativeai as genai
 
 # This allows importing from your existing llm_service.py
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-# We will use the functions you already have
+# Assuming llm_service.py contains these functions
 from llm_service import generate_json_response, clean_gemini_response
 
 # -- Initialize the FastAPI App --
 app = FastAPI(
     title="Intelligent Universal Prompt Table Generator API",
-    version="1.5" # Version bump for robust AI Chaining!
+    version="1.6" # Version bump for Draft Feature
 )
 
 # -- Configure CORS --
@@ -29,8 +30,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- Directory for saving drafts ---
+DRAFTS_DIR = os.path.join(os.path.dirname(__file__), "drafts")
+os.makedirs(DRAFTS_DIR, exist_ok=True)
+
+
 # ==========================================================
-#        HELPER FUNCTIONS FOR THE NEW "AI CHAIN"
+#                  PYDANTIC MODELS
+# ==========================================================
+
+class TableData(BaseModel):
+    schema: Dict[str, Any]
+    tableData: List[Dict[str, Any]]
+
+class SaveDraftPayload(BaseModel):
+    draftName: str = Field(..., min_length=1, max_length=50)
+    content: TableData
+
+# ==========================================================
+#        HELPER FUNCTIONS FOR THE "AI CHAIN"
 # ==========================================================
 
 def get_pdf_columns_with_llm(raw_text: str) -> list[str]:
@@ -39,15 +57,14 @@ def get_pdf_columns_with_llm(raw_text: str) -> list[str]:
     """
     if not raw_text.strip(): return []
     try:
-        # A very focused prompt to extract only the column headers
-        parsing_prompt = f"""Analyze the start of this text from a PDF and identify the column headers. Return a single, flat JSON array of strings with the header names. Example: ["SI. No.", "USN", "Name"]. Ignore document titles or any text that is clearly not a column header. Focus on typical tabular headers. Text: --- {raw_text[:1000]} ---""" # Increased context slightly
-        model = genai.GenerativeModel("gemini-1.5-flash-latest") # Use a fast model for this simple task
+        parsing_prompt = f"""Analyze the start of this text from a PDF and identify the column headers. Return a single, flat JSON array of strings with the header names. Example: ["SI. No.", "USN", "Name"]. Ignore document titles or any text that is clearly not a column header. Focus on typical tabular headers. Text: --- {raw_text[:1000]} ---"""
+        model = genai.GenerativeModel("gemini-1.5-flash-latest")
         response = model.generate_content(
             parsing_prompt,
             generation_config=genai.types.GenerationConfig(response_mime_type="application/json"),
-            request_options={"timeout": 30} # Timeout for this simpler call
+            request_options={"timeout": 30}
         )
-        cleaned_text = clean_gemini_response(response.text) # Clean before parsing
+        cleaned_text = clean_gemini_response(response.text)
         headers = json.loads(cleaned_text)
         return headers if isinstance(headers, list) and all(isinstance(h, str) for h in headers) else []
     except Exception as e:
@@ -57,13 +74,9 @@ def get_pdf_columns_with_llm(raw_text: str) -> list[str]:
 def populate_data_with_llm(raw_text: str, schema: dict) -> list:
     """
     AI CHAIN STEP 3: Uses a focused AI call to parse the full PDF text against a final, correct schema.
-    This function leverages the main generate_json_response for robustness.
     """
     if not raw_text.strip() or not schema or not schema.get("columns"): return [{}]
     try:
-        # A focused prompt to parse data against a pre-defined schema
-        # The system instructions for generate_json_response already handle the JSON output format.
-        # We just need to give it the task description and data.
         user_task_prompt = f"""
         Parse the following 'Raw Text' and structure it into a JSON array of objects that fits the provided 'JSON Schema'.
         Map the data for each row to the correct column `id` from the schema.
@@ -76,24 +89,13 @@ def populate_data_with_llm(raw_text: str, schema: dict) -> list:
         {json.dumps(schema, indent=2)}
         ```
         """
-        # The generate_json_response expects the raw text to be part of the full_prompt
-        # in a specific way if it's meant to be processed directly.
-        # We construct the full prompt including the PDF text marker as expected by SYSTEM_INSTRUCTIONS
         full_parsing_prompt = f"{user_task_prompt}\n\n--- PDF TEXT ---\n{raw_text}"
-
-        # We reuse your main llm_service function for this complex parsing task.
-        # It will return a dict with "schema" and "tableData". We only need "tableData".
         result = generate_json_response(full_parsing_prompt)
-
         if "error" in result:
             print(f"Error from generate_json_response during data population: {result['error']} - {result.get('details')}")
             return [{}]
-        
-        # The AI is instructed to return schema and data, but for this step, we mainly care about tableData.
-        # The schema generated here might be a re-interpretation, so we stick to the schema from Step 2.
         populated_data = result.get("tableData", [{}])
         return populated_data if isinstance(populated_data, list) else [{}]
-
     except Exception as e:
         print(f"Error populating data with LLM: {e}")
         return [{}]
@@ -109,26 +111,21 @@ async def generate_table_endpoint(
 ):
     final_prompt_for_schema = prompt
     raw_pdf_text = ""
-    # table_data = [{}] # Initialize to empty or placeholder if no PDF
-
-    # --- PDF Pre-processing (if file is provided) ---
+    
     if file and file.filename:
         if not file.filename.lower().endswith(".pdf"):
             raise HTTPException(status_code=400, detail="Invalid file type. Only PDF files are accepted.")
         try:
-            pdf_stream = await file.read() # Use await for async file read
+            pdf_stream = await file.read()
             doc = fitz.open(stream=pdf_stream, filetype="pdf")
             raw_pdf_text = "".join(page.get_text() for page in doc).strip()
             doc.close()
             
-            # --- AI CHAIN STEP 1: (Optional) Get column hints from PDF text ---
-            # This step is to augment the main prompt for schema generation
             if raw_pdf_text:
                 pdf_columns = get_pdf_columns_with_llm(raw_pdf_text)
                 if pdf_columns:
                     print(f"Detected columns from PDF to guide schema: {pdf_columns}")
                     columns_text = ", ".join(f'"{c}"' for c in pdf_columns)
-                    # Modify the prompt to guide the LLM for schema generation
                     super_prompt_addition = (
                         f" The user has also uploaded a PDF. "
                         f"Based on an initial scan, it seems to contain columns like: {columns_text}. "
@@ -139,82 +136,111 @@ async def generate_table_endpoint(
                     final_prompt_for_schema += "\n" + super_prompt_addition
         except Exception as e:
             print(f"Failed to read or analyze PDF: {e}")
-            # Decide if this is a fatal error or if you can proceed without PDF data
-            # For now, we'll just print and let schema generation proceed with original prompt
-            raw_pdf_text = "" # Ensure it's empty if PDF processing failed
+            raw_pdf_text = ""
 
-    # --- AI CHAIN STEP 2: Generate the Final, Complete Schema (and initial data if no PDF) ---
     print(f"Generating schema with prompt: '{final_prompt_for_schema[:200]}...'")
-
-    # The main LLM call that uses SYSTEM_INSTRUCTIONS.
-    # If raw_pdf_text is available, it will be used by the LLM as per SYSTEM_INSTRUCTIONS.
-    # If no raw_pdf_text, it should generate schema and empty tableData.
     llm_full_prompt = f"{final_prompt_for_schema}"
     if raw_pdf_text:
         llm_full_prompt += f"\n\n--- PDF TEXT ---\n{raw_pdf_text}"
     
-    # Use the robust generate_json_response
     response_json = generate_json_response(llm_full_prompt)
     
     if "error" in response_json or "schema" not in response_json:
         error_detail = response_json.get('details', 'Unknown LLM error.')
-        if "raw_response" in response_json: # Log raw response if available
+        if "raw_response" in response_json:
             print(f"LLM Raw Error Response: {response_json['raw_response']}")
         raise HTTPException(status_code=500, detail=f"Failed to generate table schema: {error_detail}")
     
     final_schema = response_json["schema"]
-    # tableData from this call will be used if PDF processing was successful via SYSTEM_INSTRUCTIONS
-    # or it will be an empty array if no PDF was provided / processed.
     table_data_from_step2 = response_json.get("tableData", [{}])
-
-
-    # --- AI CHAIN STEP 3: (Refined) Populate Data if PDF was processed AND schema is robust ---
-    # The initial `generate_json_response` (Step 2) is already designed to populate `tableData`
-    # if `--- PDF TEXT ---` is present. So, `populate_data_with_llm` might be redundant
-    # IF the `SYSTEM_INSTRUCTIONS` are followed perfectly by the LLM in the first call.
-    # However, having a dedicated parsing step can be more robust if the initial parse isn't perfect
-    # or if you want to apply different logic/prompting for data extraction vs. schema generation.
-
-    # Current logic: The `generate_json_response` in Step 2 handles schema AND data from PDF.
-    # `table_data_from_step2` should contain the data if `raw_pdf_text` was provided.
-    # If you find `table_data_from_step2` is often poorly populated when a PDF is present,
-    # then you might re-enable a more focused `populate_data_with_llm` call here,
-    # passing `raw_pdf_text` and `final_schema`.
-
-    # For now, we trust the `generate_json_response` with `SYSTEM_INSTRUCTIONS` to do both.
     final_table_data = table_data_from_step2
-    if not final_table_data and raw_pdf_text: # If PDF was there but no data came back
+
+    if not final_table_data and raw_pdf_text:
         print("Initial LLM call didn't populate data from PDF, attempting focused population...")
-        # This would be the place for a corrective call if needed.
-        # For simplicity in this iteration, we'll rely on the first call.
-        # If you were to add it back:
-        # final_table_data = populate_data_with_llm(raw_pdf_text, final_schema)
-        pass # Keeping it simple for now
+        pass
 
-
-    # Ensure tableData is an array, even if it's an array with one empty object
     if not isinstance(final_table_data, list):
         final_table_data = [{}]
-    if not final_table_data: # If it's an empty list
+    if not final_table_data:
          final_table_data = [{}]
 
+    return {"schema": final_schema, "tableData": final_table_data}
 
-    # --- Final Step: Return the complete, correct result ---
-    return { "schema": final_schema, "tableData": final_table_data }
 
-# Other endpoints remain the same
+# ==========================================================
+#               NEW DRAFT ENDPOINTS
+# ==========================================================
+
+def sanitize_filename(name: str) -> str:
+    """Sanitizes a string to be a safe filename."""
+    name = re.sub(r'[^\w\s-]', '', name).strip()
+    name = re.sub(r'[-\s]+', '-', name)
+    return name
+
+@app.post("/save-draft")
+async def save_draft(payload: SaveDraftPayload):
+    """Saves the current table schema and data as a JSON file."""
+    try:
+        draft_name = payload.draftName
+        sanitized_name = sanitize_filename(draft_name)
+        if not sanitized_name:
+            raise HTTPException(status_code=400, detail="Invalid draft name. Name must contain alphanumeric characters.")
+        
+        file_path = os.path.join(DRAFTS_DIR, f"{sanitized_name}.json")
+        
+        # content is already a Pydantic model, so we can convert it to a dict
+        draft_content = payload.content.dict()
+
+        with open(file_path, "w") as f:
+            json.dump(draft_content, f, indent=4)
+            
+        return {"status": "success", "message": f"Draft '{draft_name}' saved successfully."}
+    except Exception as e:
+        print(f"Error saving draft: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save draft. Reason: {e}")
+
+@app.get("/drafts")
+async def get_drafts_list():
+    """Returns a list of all available draft filenames."""
+    try:
+        files = [f.replace(".json", "") for f in os.listdir(DRAFTS_DIR) if f.endswith(".json")]
+        return {"drafts": files}
+    except Exception as e:
+        print(f"Error listing drafts: {e}")
+        raise HTTPException(status_code=500, detail="Could not retrieve draft list.")
+
+@app.get("/drafts/{draft_id}")
+async def load_draft(draft_id: str = Path(..., description="The ID of the draft to load.")):
+    """Loads a specific draft by its ID (filename without extension)."""
+    try:
+        sanitized_id = sanitize_filename(draft_id)
+        file_path = os.path.join(DRAFTS_DIR, f"{sanitized_id}.json")
+        
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="Draft not found.")
+            
+        with open(file_path, "r") as f:
+            content = json.load(f)
+        
+        return content
+    except HTTPException as e:
+        raise e # Re-raise HTTP exceptions
+    except Exception as e:
+        print(f"Error loading draft {draft_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Could not load draft '{draft_id}'.")
+
+
+# ==========================================================
+#                 OTHER ENDPOINTS
+# ==========================================================
+
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
     favicon_path = os.path.join(os.path.dirname(__file__), "static", "favicon.ico")
     if os.path.exists(favicon_path):
         return FileResponse(favicon_path)
-    return {"status": "no favicon"} # Or raise 404
+    return JSONResponse(status_code=404, content={"status": "no favicon"})
 
 @app.get("/")
 def root():
     return {"status": "ok", "message": "Welcome to the Intelligent Table Generator API!"}
-
-# To run this app (save as main.py in an 'app' directory, with llm_service.py):
-# Ensure .env file with GOOGLE_API_KEY is in the backend/app directory or parent.
-# Install dependencies: fastapi uvicorn python-multipart python-dotenv google-generativeai PyMuPDF
-# Run from backend directory: uvicorn app.main:app --reload
