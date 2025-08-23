@@ -1,4 +1,4 @@
-  <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -63,7 +63,6 @@
         <label for="pdf-file-input">2. (Optional) Upload a PDF to pre-populate data:</label>
         <input type="file" id="pdf-file-input" accept=".pdf">
       </div>
-      <!-- NEW Draft Loading UI -->
       <div id="draft-controls" class="draft-container hidden">
         <label for="draft-select" style="font-weight:bold;">Or load a saved draft:</label>
         <select id="draft-select"></select>
@@ -87,17 +86,27 @@
       const draftControls = document.getElementById('draft-controls');
       const draftSelect = document.getElementById('draft-select');
       const loadDraftBtn = document.getElementById('load-draft-btn');
-
-      // Will be dynamically created, so we'll select them later
-      let exportExcelBtn, exportPdfBtn, saveDraftBtn;
       
+      let exportExcelBtn, exportPdfBtn, saveDraftBtn;
       let currentSchema = null;
       let tableData = [{}];
 
-      const API_BASE_URL = 'http://localhost:8000';
+      // ===== MODIFIED: Pointing to your live Render API URL =====
+      const API_BASE_URL = 'https://intillegent-table-genai.onrender.com';
+      
       const MIN_PERCENTAGE_PER_COMPONENT = 0.40;
       const MIN_TOTAL_PERCENTAGE_FOR_ELIGIBILITY = 0.40;
       
+      // ===== NEW: Function to get or generate a unique user ID from browser storage =====
+      function getUserID() {
+        let userId = localStorage.getItem('intelligentTableUserID_v1');
+        if (!userId) {
+          userId = crypto.randomUUID(); // Generates a secure, random, unique ID
+          localStorage.setItem('intelligentTableUserID_v1', userId);
+        }
+        return userId;
+      }
+
       // --- Event Listeners ---
       generateBtn.addEventListener('click', handleGenerateTable);
       loadDraftBtn.addEventListener('click', handleLoadDraft);
@@ -108,27 +117,23 @@
       // --- Initial Load ---
       fetchAndPopulateDrafts();
 
-
       // --- Core Functions: Generate, Save, Load ---
 
       async function handleGenerateTable() {
+        // ... (This function remains unchanged)
         const prompt = promptInput.value.trim();
         if (!prompt) { showError('Prompt cannot be empty.'); return; }
         const pdfFile = pdfFileInput.files[0];
         setLoading(true);
         disableAllActionButtons();
-
         try {
           const formData = new FormData();
           formData.append('prompt', prompt);
           if (pdfFile) { formData.append('file', pdfFile, pdfFile.name); }
-
           const response = await fetch(`${API_BASE_URL}/generate-table`, { method: 'POST', body: formData });
           const responseData = await response.json();
-          
           if (!response.ok) { throw new Error(responseData.detail || `API Error: ${response.statusText}`); }
           if (!responseData.schema || !responseData.schema.columns) { throw new Error("Received invalid schema from server.");}
-
           currentSchema = responseData.schema;
           tableData = Array.isArray(responseData.tableData) && responseData.tableData.length > 0 ? responseData.tableData : [{}];
           renderTable(currentSchema);
@@ -148,7 +153,6 @@
           alert("Draft name cannot be empty.");
           return;
         }
-
         disableAllActionButtons();
         try {
           const payload = {
@@ -159,15 +163,19 @@
             }
           };
 
+          // ===== MODIFIED: Added custom 'X-User-ID' header to the request =====
           const response = await fetch(`${API_BASE_URL}/save-draft`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 
+              'Content-Type': 'application/json',
+              'X-User-ID': getUserID()
+            },
             body: JSON.stringify(payload)
           });
           const result = await response.json();
           if (!response.ok) { throw new Error(result.detail || "Failed to save draft."); }
           alert(`Success: ${result.message}`);
-          await fetchAndPopulateDrafts(); // Refresh the drafts list
+          await fetchAndPopulateDrafts();
         } catch (err) {
           showError(`Could not save draft: ${err.message}`);
         } finally {
@@ -178,14 +186,15 @@
       async function handleLoadDraft() {
         const draftId = draftSelect.value;
         if (!draftId) { alert("Please select a draft to load."); return; }
-
         setLoading(true);
         disableAllActionButtons();
         try {
-          const response = await fetch(`${API_BASE_URL}/drafts/${draftId}`);
+          // ===== MODIFIED: Added custom 'X-User-ID' header to the request =====
+          const response = await fetch(`${API_BASE_URL}/drafts/${draftId}`, {
+            headers: { 'X-User-ID': getUserID() }
+          });
           const data = await response.json();
           if (!response.ok) { throw new Error(data.detail || "Failed to load draft."); }
-
           currentSchema = data.schema;
           tableData = data.tableData;
           renderTable(currentSchema);
@@ -200,11 +209,13 @@
 
       async function fetchAndPopulateDrafts() {
         try {
-            const response = await fetch(`${API_BASE_URL}/drafts`);
+            // ===== MODIFIED: Added custom 'X-User-ID' header to the request =====
+            const response = await fetch(`${API_BASE_URL}/drafts`, {
+              headers: { 'X-User-ID': getUserID() }
+            });
             const data = await response.json();
             if (!response.ok) throw new Error("Could not fetch drafts list.");
-
-            draftSelect.innerHTML = '<option value="">-- Select a Draft --</option>'; // Placeholder
+            draftSelect.innerHTML = '<option value="">-- Select a Draft --</option>';
             if (data.drafts && data.drafts.length > 0) {
                 data.drafts.forEach(draftName => {
                     const option = document.createElement('option');
@@ -222,148 +233,80 @@
         }
       }
 
-      // --- Rendering and UI Logic ---
+      // --- All other JavaScript functions (rendering, calculations, export, etc.) remain unchanged ---
 
       function renderTable(schema) {
-        tableContainer.innerHTML = '';
-        errorMessageContainer.classList.add('hidden');
-
+        tableContainer.innerHTML = ''; errorMessageContainer.classList.add('hidden');
         const tableWrapper = document.createElement('div'); tableWrapper.className = 'table-wrapper';
         const tableNameElement = document.createElement('h2');
-        tableNameElement.textContent = schema.tableName || 'Generated Table';
-        tableWrapper.appendChild(tableNameElement);
-        
-        const table = document.createElement('table');
-        const thead = document.createElement('thead');
-        const tbody = document.createElement('tbody'); tbody.id = 'table-body';
-        
+        tableNameElement.textContent = schema.tableName || 'Generated Table'; tableWrapper.appendChild(tableNameElement);
+        const table = document.createElement('table'); const thead = document.createElement('thead'); const tbody = document.createElement('tbody'); tbody.id = 'table-body';
         const headerRow = document.createElement('tr');
         schema.columns.forEach(col => { const th = document.createElement('th'); th.textContent = col.header; headerRow.appendChild(th); });
         thead.appendChild(headerRow); table.append(thead, tbody); tableWrapper.appendChild(table);
-        
-        // --- Action Buttons ---
         const actionsDiv = document.createElement('div'); actionsDiv.className = 'actions-container';
-        const addRowBtn = document.createElement('button'); addRowBtn.textContent = '+ Add Row'; addRowBtn.className = 'add-row-btn';
-        addRowBtn.addEventListener('click', addRow); actionsDiv.appendChild(addRowBtn);
-
-        saveDraftBtn = document.createElement('button'); saveDraftBtn.textContent = 'Save Draft'; saveDraftBtn.className = 'save-draft-btn';
-        saveDraftBtn.addEventListener('click', handleSaveDraft); actionsDiv.appendChild(saveDraftBtn);
-
-        exportExcelBtn = document.createElement('button'); exportExcelBtn.textContent = 'Export to Excel'; exportExcelBtn.className = 'export-btn';
-        exportExcelBtn.addEventListener('click', handleExportExcel); actionsDiv.appendChild(exportExcelBtn);
-
-        exportPdfBtn = document.createElement('button'); exportPdfBtn.textContent = 'Export to PDF'; exportPdfBtn.className = 'export-btn';
-        exportPdfBtn.addEventListener('click', handleExportPdf); actionsDiv.appendChild(exportPdfBtn);
-        
-        tableWrapper.appendChild(actionsDiv); tableContainer.appendChild(tableWrapper);
-        renderTableBody();
+        const addRowBtn = document.createElement('button'); addRowBtn.textContent = '+ Add Row'; addRowBtn.className = 'add-row-btn'; addRowBtn.addEventListener('click', addRow); actionsDiv.appendChild(addRowBtn);
+        saveDraftBtn = document.createElement('button'); saveDraftBtn.textContent = 'Save Draft'; saveDraftBtn.className = 'save-draft-btn'; saveDraftBtn.addEventListener('click', handleSaveDraft); actionsDiv.appendChild(saveDraftBtn);
+        exportExcelBtn = document.createElement('button'); exportExcelBtn.textContent = 'Export to Excel'; exportExcelBtn.className = 'export-btn'; exportExcelBtn.addEventListener('click', handleExportExcel); actionsDiv.appendChild(exportExcelBtn);
+        exportPdfBtn = document.createElement('button'); exportPdfBtn.textContent = 'Export to PDF'; exportPdfBtn.className = 'export-btn'; exportPdfBtn.addEventListener('click', handleExportPdf); actionsDiv.appendChild(exportPdfBtn);
+        tableWrapper.appendChild(actionsDiv); tableContainer.appendChild(tableWrapper); renderTableBody();
       }
-      
       function renderTableBody() {
-        const tbody = document.getElementById('table-body');
-        if (!tbody || !currentSchema) { console.error("Table body or schema not found for rendering."); return; }
-        tbody.innerHTML = ''; 
-
-        const primaryKeyColumn = currentSchema.columns.find(c => c.isPrimaryKey);
-        const primaryKeyId = primaryKeyColumn ? primaryKeyColumn.id : null;
-
+        const tbody = document.getElementById('table-body'); if (!tbody || !currentSchema) { console.error("Table body or schema not found for rendering."); return; } tbody.innerHTML = '';
+        const primaryKeyColumn = currentSchema.columns.find(c => c.isPrimaryKey); const primaryKeyId = primaryKeyColumn ? primaryKeyColumn.id : null;
         tableData.forEach((rowData, rowIndex) => {
-          const tr = document.createElement('tr');
-          const currentRow = rowData || {}; 
+          const tr = document.createElement('tr'); const currentRow = rowData || {};
           const isManuallyAddedRow = primaryKeyId ? !(currentRow && currentRow[primaryKeyId] !== undefined && currentRow[primaryKeyId] !== null && String(currentRow[primaryKeyId]).trim() !== '') : true;
-          
-          updateRowDataCalculations(currentRow); 
-
-          currentSchema.columns.forEach((col) => { 
-            const td = document.createElement('td');
-            const isCalculatedOrEligibilityStatus = col.formula || col.columnPurpose === "student_eligibility_status";
+          updateRowDataCalculations(currentRow);
+          currentSchema.columns.forEach((col) => {
+            const td = document.createElement('td'); const isCalculatedOrEligibilityStatus = col.formula || col.columnPurpose === "student_eligibility_status";
             const shouldBeEditable = col.isEditable || (isManuallyAddedRow && !isCalculatedOrEligibilityStatus);
-
-            if (shouldBeEditable) {
-              td.appendChild(createCellInput(col, rowIndex)); 
-            } else {
+            if (shouldBeEditable) { td.appendChild(createCellInput(col, rowIndex)); } else {
               let cellValue = (currentRow && currentRow[col.id] !== undefined && currentRow[col.id] !== null) ? currentRow[col.id] : '';
-              if (col.type === 'number' && (cellValue === '' || isNaN(parseFloat(cellValue))) && !shouldBeEditable) {
-                 cellValue = '0'; 
-              }
-              if (col.formula && typeof cellValue === 'number' && col.header?.includes('%')) {
-                  cellValue = cellValue.toFixed(2); 
-              }
+              if (col.type === 'number' && (cellValue === '' || isNaN(parseFloat(cellValue))) && !shouldBeEditable) { cellValue = '0'; }
+              if (col.formula && typeof cellValue === 'number' && col.header?.includes('%')) { cellValue = cellValue.toFixed(2); }
               td.textContent = cellValue.toString();
             }
             tr.appendChild(td);
           });
-          tbody.appendChild(tr);
-          applyRowStyling(tr, currentRow); 
+          tbody.appendChild(tr); applyRowStyling(tr, currentRow);
         });
       }
-
       function createCellInput(col, rowIndex) {
-        const value = (tableData[rowIndex] && tableData[rowIndex][col.id] !== undefined && tableData[rowIndex][col.id] !== null) 
-                      ? tableData[rowIndex][col.id] 
-                      : '';
-        let input; 
-        switch (col.type) {
+        const value = (tableData[rowIndex] && tableData[rowIndex][col.id] !== undefined && tableData[rowIndex][col.id] !== null) ? tableData[rowIndex][col.id] : '';
+        let input; switch (col.type) {
           case 'number':
             input = document.createElement('input'); input.type = 'number'; input.value = value;
-            if (col.maxValue !== undefined && col.maxValue !== null) { 
-                input.max = col.maxValue; 
-                if ((input.min === '' || input.min === undefined) && (col.header?.toLowerCase().includes("mark") || col.header?.toLowerCase().includes("score") || col.header?.toLowerCase().includes("quiz") || col.header?.toLowerCase().includes("exam") || col.header?.toLowerCase().includes("sessional") || col.header?.toLowerCase().includes("lab") || col.header?.toLowerCase().includes("assignment") ) ) {
-                     input.min = 0; 
-                }
-            }
+            if (col.maxValue !== undefined && col.maxValue !== null) { input.max = col.maxValue; if ((input.min === '' || input.min === undefined) && (col.header?.toLowerCase().includes("mark") || col.header?.toLowerCase().includes("score") || col.header?.toLowerCase().includes("quiz") || col.header?.toLowerCase().includes("exam") || col.header?.toLowerCase().includes("sessional") || col.header?.toLowerCase().includes("lab") || col.header?.toLowerCase().includes("assignment"))) { input.min = 0; } }
             break;
           case 'boolean': input = document.createElement('input'); input.type = 'checkbox'; input.checked = !!value; break;
           case 'date': input = document.createElement('input'); input.type = 'date'; input.value = value; break;
           default: input = document.createElement('input'); input.type = 'text'; input.value = value;
         }
-        input.dataset.rowIndex = rowIndex.toString(); input.dataset.colId = col.id;
-        input.addEventListener('input', handleCellChange); input.addEventListener('change', handleCellChange); 
-        return input;
+        input.dataset.rowIndex = rowIndex.toString(); input.dataset.colId = col.id; input.addEventListener('input', handleCellChange); input.addEventListener('change', handleCellChange); return input;
       }
-      
       function handleCellChange(event) {
-        const input = event.target;
-        const rowIndex = parseInt(input.dataset.rowIndex, 10);
-        const colId = input.dataset.colId;
-        
-        if (!tableData[rowIndex]) { tableData[rowIndex] = {}; } 
-        let value = input.type === 'checkbox' ? input.checked : input.value;
-
+        const input = event.target; const rowIndex = parseInt(input.dataset.rowIndex, 10); const colId = input.dataset.colId;
+        if (!tableData[rowIndex]) { tableData[rowIndex] = {}; } let value = input.type === 'checkbox' ? input.checked : input.value;
         if (input.type === 'number') {
-            let numValue = parseFloat(value); 
-            if (value === '') { /* Keep empty string */ }
-            else if (isNaN(numValue)) { 
-                value = (tableData[rowIndex]?.[colId] !== undefined && !isNaN(parseFloat(tableData[rowIndex][colId]))) ? tableData[rowIndex][colId] : ''; 
-                input.value = value; 
-            } else { 
-                if (input.max !== '' && !isNaN(parseFloat(input.max))) { const maxValue = parseFloat(input.max); if (numValue > maxValue) { numValue = maxValue; input.value = numValue.toString(); }}
-                if (input.min !== '' && !isNaN(parseFloat(input.min))) { const minValue = parseFloat(input.min); if (numValue < minValue) { numValue = minValue; input.value = numValue.toString(); }}
-                value = numValue; 
+            let numValue = parseFloat(value); if (value === '') {} else if (isNaN(numValue)) { value = (tableData[rowIndex]?.[colId] !== undefined && !isNaN(parseFloat(tableData[rowIndex][colId]))) ? tableData[rowIndex][colId] : ''; input.value = value; } else {
+                if (input.max !== '' && !isNaN(parseFloat(input.max))) { const maxValue = parseFloat(input.max); if (numValue > maxValue) { numValue = maxValue; input.value = numValue.toString(); } }
+                if (input.min !== '' && !isNaN(parseFloat(input.min))) { const minValue = parseFloat(input.min); if (numValue < minValue) { numValue = minValue; input.value = numValue.toString(); } }
+                value = numValue;
             }
         }
-        tableData[rowIndex][colId] = value;
-        updateRowDataCalculations(tableData[rowIndex]); 
-        const rowElement = document.getElementById('table-body')?.rows[rowIndex];
-        if (rowElement) { 
+        tableData[rowIndex][colId] = value; updateRowDataCalculations(tableData[rowIndex]); const rowElement = document.getElementById('table-body')?.rows[rowIndex];
+        if (rowElement) {
             currentSchema.columns.forEach((col, colIndex) => {
-                const cell = rowElement.cells[colIndex];
-                const isCalculatedOrEligibilityStatus = col.formula || col.columnPurpose === "student_eligibility_status";
-                if (cell && isCalculatedOrEligibilityStatus && !col.isEditable ) { 
-                    let displayValue = (tableData[rowIndex]?.[col.id] !== undefined && tableData[rowIndex][col.id] !== null) 
-                                         ? tableData[rowIndex][col.id]
-                                         : (col.columnPurpose === "student_eligibility_status" ? '' : '0'); 
-                    if (col.formula && typeof displayValue === 'number' && col.header?.includes('%')) {
-                        displayValue = displayValue.toFixed(2);
-                    }
+                const cell = rowElement.cells[colIndex]; const isCalculatedOrEligibilityStatus = col.formula || col.columnPurpose === "student_eligibility_status";
+                if (cell && isCalculatedOrEligibilityStatus && !col.isEditable) {
+                    let displayValue = (tableData[rowIndex]?.[col.id] !== undefined && tableData[rowIndex][col.id] !== null) ? tableData[rowIndex][col.id] : (col.columnPurpose === "student_eligibility_status" ? '' : '0');
+                    if (col.formula && typeof displayValue === 'number' && col.header?.includes('%')) { displayValue = displayValue.toFixed(2); }
                     cell.textContent = displayValue.toString();
                 }
-            });
-            applyRowStyling(rowElement, tableData[rowIndex]); 
+            }); applyRowStyling(rowElement, tableData[rowIndex]);
         }
       }
-
-      // --- All calculation and utility functions below this line are unchanged ---
       function updateRowDataCalculations(rowData) { if (!rowData || !currentSchema) return; currentSchema.columns.forEach(col => { if (col.formula) { const calculatedValue = calculateFormula(rowData, col.formula); rowData[col.id] = (calculatedValue === null || !isFinite(calculatedValue)) ? 0 : calculatedValue; } }); const eligibilityStatusCol = currentSchema.columns.find(c => c.columnPurpose === "student_eligibility_status"); if (eligibilityStatusCol) { const statusValue = calculateEligibilityStatusValue(rowData); rowData[eligibilityStatusCol.id] = statusValue; } }
       function calculateFormula(rowData, formula) { if (!formula || !currentSchema || !rowData) return null; try { const scope = {}; currentSchema.columns.forEach(col => { scope[col.id] = parseFloat(rowData[col.id]) || 0; }); let expressionToEvaluate = formula; const sumMatch = formula.match(/^SUM\((.*)\)$/i); if (sumMatch && sumMatch[1]) { const argsString = sumMatch[1]; expressionToEvaluate = argsString.split(',').map(arg => arg.trim()).filter(arg => arg.length > 0 && currentSchema.columns.some(c => c.id === arg)).join(' + '); if (!expressionToEvaluate.trim()) { return 0; } } if (!expressionToEvaluate.trim()) { return 0; } const result = math.evaluate(expressionToEvaluate, scope); return !isFinite(result) ? 0 : result; } catch (e) { console.error('Formula Evaluation Error:', e.message, { formula, rowData, scope: (typeof scope !== 'undefined' ? JSON.stringify(scope) : 'N/A') }); return null; } }
       function calculateEligibilityStatusValue(rowData) { if (!rowData || !currentSchema) { return 'Pending'; } let isEligible = true; let anyComponentBelowMin = false; let foundTotalColumn = false; let foundScoreComponents = false; const scoreComponentKeywords = ["sessional", "assignment", "theory", "lab work", "record book", "viva", "quiz", "midterm", "final exam", "marks", "score"]; const componentScoreColumns = currentSchema.columns.filter(col => col.type === 'number' && col.isEditable && col.maxValue !== undefined && col.maxValue !== null && scoreComponentKeywords.some(keyword => col.header?.toLowerCase().includes(keyword))); if (componentScoreColumns.length > 0) { foundScoreComponents = true; componentScoreColumns.forEach(col => { const marks = parseFloat(rowData[col.id]) || 0; const minMarksForComponent = col.maxValue * MIN_PERCENTAGE_PER_COMPONENT; if (marks < minMarksForComponent) { anyComponentBelowMin = true; } }); } if (anyComponentBelowMin) { isEligible = false; } const totalColSchema = currentSchema.columns.find(c => c.formula && c.formula.toUpperCase().startsWith("SUM(") && c.header?.toUpperCase().includes("TOTAL")); if (totalColSchema) { foundTotalColumn = true; const totalMarks = parseFloat(rowData[totalColSchema.id]) || 0; const maxTotalFromSchema = totalColSchema.maxValue || 0; if (maxTotalFromSchema === 0) { console.warn(`Total column "${totalColSchema.header}" has zero or missing maxValue. Min total check for eligibility might be unreliable.`); } const minOverallTotalMarks = maxTotalFromSchema * MIN_TOTAL_PERCENTAGE_FOR_ELIGIBILITY; if (maxTotalFromSchema > 0 && totalMarks < minOverallTotalMarks) { isEligible = false; } } if (!foundScoreComponents && !foundTotalColumn) { return 'Error: Schema Def.'; } return isEligible ? 'Eligible' : 'Not Eligible'; }
@@ -374,19 +317,8 @@
       function getCleanTableDataForExport() { if (!currentSchema || !tableData || tableData.length === 0) return { headers: [], data: [] }; tableData.forEach((rowData) => updateRowDataCalculations(rowData)); const headers = currentSchema.columns.map(col => col.header); const data = tableData.map(row => { const currentRowData = row || {}; return currentSchema.columns.map(col => { let cellValue = currentRowData[col.id]; if (col.formula && typeof cellValue === 'number' && col.header?.includes('%')) { cellValue = parseFloat(cellValue.toFixed(2)); } if (typeof cellValue === 'boolean') { return cellValue ? 'TRUE' : 'FALSE'; } return (cellValue !== undefined && cellValue !== null) ? cellValue : ''; }); }); return { headers, data }; }
       function handleExportExcel() { if (!currentSchema || tableData.length === 0 || (tableData.length === 1 && Object.keys(tableData[0] || {}).length === 0)) { showError("No data to export."); return; } const { headers, data: exportableData } = getCleanTableDataForExport(); if (exportableData.length === 0 && !(tableData.length === 1 && Object.keys(tableData[0] || {}).length === 0)) { showError("No data rows."); return; } const worksheetData = [headers]; exportableData.forEach(row => { worksheetData.push(row.map(cell => (cell === null || cell === undefined) ? "" : cell)); }); const worksheet = XLSX.utils.aoa_to_sheet(worksheetData); const workbook = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(workbook, worksheet, "Sheet1"); const fileName = (currentSchema.tableName || 'table_export').replace(/\s+/g, '_') + '.xlsx'; XLSX.writeFile(workbook, fileName); }
       function handleExportPdf() { if (!currentSchema || tableData.length === 0 || (tableData.length === 1 && Object.keys(tableData[0] || {}).length === 0)) { showError("No data to export."); return; } const { headers, data: exportableData } = getCleanTableDataForExport(); if (exportableData.length === 0 && !(tableData.length === 1 && Object.keys(tableData[0] || {}).length === 0)) { showError("No data rows."); return; } const stringDataForPdf = exportableData.map(row => row.map(cell => (cell === null || cell === undefined) ? "" : String(cell))); const { jsPDF } = window.jspdf; const doc = new jsPDF({ orientation: "landscape" }); doc.autoTable({ head: [headers], body: stringDataForPdf, startY: 20, didDrawPage: function (data) { doc.setFontSize(18); doc.setTextColor(40); const titleText = currentSchema.tableName || 'Generated Table'; doc.text(titleText, data.settings.margin.left, 15); }, styles: { fontSize: 8, cellPadding: 2, halign: 'left' }, headStyles: { fillColor: [22, 160, 133], textColor: 255, fontStyle: 'bold' }, alternateRowStyles: { fillColor: [240, 240, 240] }, }); const fileName = (currentSchema.tableName || 'table_export').replace(/\s+/g, '_') + '.pdf'; doc.save(fileName); }
-      
-      // --- Button State Helpers ---
-      function disableAllActionButtons() {
-          if (exportExcelBtn) exportExcelBtn.disabled = true;
-          if (exportPdfBtn) exportPdfBtn.disabled = true;
-          if (saveDraftBtn) saveDraftBtn.disabled = true;
-      }
-      function enableAllActionButtons() {
-          if (exportExcelBtn) exportExcelBtn.disabled = false;
-          if (exportPdfBtn) exportPdfBtn.disabled = false;
-          if (saveDraftBtn) saveDraftBtn.disabled = false;
-      }
-
+      function disableAllActionButtons() { if (exportExcelBtn) exportExcelBtn.disabled = true; if (exportPdfBtn) exportPdfBtn.disabled = true; if (saveDraftBtn) saveDraftBtn.disabled = true; }
+      function enableAllActionButtons() { if (exportExcelBtn) exportExcelBtn.disabled = false; if (exportPdfBtn) exportPdfBtn.disabled = false; if (saveDraftBtn) saveDraftBtn.disabled = false; }
     });
   </script>
 </body>
