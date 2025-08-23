@@ -1,4 +1,4 @@
- from fastapi import FastAPI, HTTPException, Form, UploadFile, File, Path
+from fastapi import FastAPI, HTTPException, Form, UploadFile, File, Path
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
@@ -156,11 +156,8 @@ async def generate_table_endpoint(
     table_data_from_step2 = response_json.get("tableData", [{}])
     final_table_data = table_data_from_step2
 
-    # This block seems to be a placeholder, if you intend to re-populate data, you'd call populate_data_with_llm here
     if not final_table_data and raw_pdf_text:
         print("Initial LLM call didn't populate data from PDF, attempting focused population...")
-        # To make this functional, you would add:
-        # final_table_data = populate_data_with_llm(raw_pdf_text, final_schema)
         pass
 
     if not isinstance(final_table_data, list):
@@ -192,7 +189,6 @@ async def save_draft(payload: SaveDraftPayload):
         
         file_path = os.path.join(DRAFTS_DIR, f"{sanitized_name}.json")
         
-        # content is already a Pydantic model, so we can convert it to a dict
         draft_content = payload.content.dict()
 
         with open(file_path, "w") as f:
@@ -228,7 +224,7 @@ async def load_draft(draft_id: str = Path(..., description="The ID of the draft 
         
         return content
     except HTTPException as e:
-        raise e # Re-raise HTTP exceptions
+        raise e
     except Exception as e:
         print(f"Error loading draft {draft_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Could not load draft '{draft_id}'.")
@@ -240,8 +236,6 @@ async def load_draft(draft_id: str = Path(..., description="The ID of the draft 
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
-    # Assuming you have a 'static' folder next to your 'backend' folder
-    # The path might need adjustment based on your project structure
     favicon_path = os.path.join(os.path.dirname(__file__), "static", "favicon.ico")
     if os.path.exists(favicon_path):
         return FileResponse(favicon_path)
