@@ -11,6 +11,7 @@ import re
 import google.generativeai as genai
 
 # This allows importing from your existing llm_service.py
+# Ensure llm_service.py is in the same directory or a discoverable path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 # Assuming llm_service.py contains these functions
 from llm_service import generate_json_response, clean_gemini_response
@@ -155,8 +156,11 @@ async def generate_table_endpoint(
     table_data_from_step2 = response_json.get("tableData", [{}])
     final_table_data = table_data_from_step2
 
+    # This block seems to be a placeholder, if you intend to re-populate data, you'd call populate_data_with_llm here
     if not final_table_data and raw_pdf_text:
         print("Initial LLM call didn't populate data from PDF, attempting focused population...")
+        # To make this functional, you would add:
+        # final_table_data = populate_data_with_llm(raw_pdf_text, final_schema)
         pass
 
     if not isinstance(final_table_data, list):
@@ -236,6 +240,8 @@ async def load_draft(draft_id: str = Path(..., description="The ID of the draft 
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
+    # Assuming you have a 'static' folder next to your 'backend' folder
+    # The path might need adjustment based on your project structure
     favicon_path = os.path.join(os.path.dirname(__file__), "static", "favicon.ico")
     if os.path.exists(favicon_path):
         return FileResponse(favicon_path)
