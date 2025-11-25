@@ -224,3 +224,4 @@ async def load_draft(
 @app.get("/")
 def root():
     return {"status": "ok", "message": "Welcome to the Intelligent Table Generator API!"}
+
