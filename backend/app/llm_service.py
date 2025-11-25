@@ -89,7 +89,7 @@ def generate_json_response(
     initial_backoff: float = 5.0,
     backoff_factor: float = 2.0,
     max_backoff: float = 60.0,
-    model_name: str = "models/gemini-1.5-flash-latest" # or "models/gemini-pro"
+    model_name: str = "gemini-2.5-flash" # or "models/gemini-pro"
 ) -> dict:
     """
     Takes a combined prompt and gets a single JSON object containing
@@ -144,4 +144,5 @@ def generate_json_response(
     return {
         "error": "LLM request failed after multiple retries.",
         "details": str(last_exception) if last_exception else "Unknown error."
+
     }
